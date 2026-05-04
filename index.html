@@ -9,7 +9,7 @@
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 html,body{width:100%;height:100%;overflow:hidden;background:#0f0e26;touch-action:none}
-#game{display:block;image-rendering:pixelated;image-rendering:crisp-edges;position:absolute;top:50%;left:50%;transform:translate(-50%,-50%)}
+#game{display:block;image-rendering:pixelated;image-rendering:crisp-edges;width:100%;height:100%}
 #loading{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);color:#a78bfa;font:bold 18px Arial,sans-serif;text-align:center}
 #loading .dot{animation:pulse 1.2s infinite}
 @keyframes pulse{0%,100%{opacity:.3}50%{opacity:1}}
@@ -20,27 +20,28 @@ html,body{width:100%;height:100%;overflow:hidden;background:#0f0e26;touch-action
 <canvas id="game"></canvas>
 <script>
 // ============================================================
-// Flappy Kiro — HTML5/Canvas
+// Flappy Kiro — HTML5/Canvas — Responsive
 // ============================================================
 const C = document.getElementById('game');
 const X = C.getContext('2d');
 
-// --- Config (mirrors Python config.py) ---
-const W = 288, H = 512;
+// --- Reference design: 512px tall ---
+// All game proportions are derived from this reference height.
+// The canvas fills its container 100% and scales proportionally.
+const REF_H = 512;
+
+// --- Proportional config (in reference pixels) ---
 const GRAVITY    = 1500;
 const JUMP_VEL   = -400;
 const MAX_FALL   = 600;
 const PIPE_SPEED  = 140;
-const PIPE_GAP    = 110;
+const REF_PIPE_GAP   = 110;
 const PIPE_SPAWN  = 1.4;
-const PIPE_MIN_TOP = 60;
-const GROUND_H   = 112;
-const GROUND_Y   = H - GROUND_H; // 400
-const BIRD_START_X = Math.floor(W / 3); // 96
-const BIRD_START_Y = Math.floor(H / 2); // 256
-const BIRD_SIZE   = 40;
+const REF_PIPE_MIN_TOP = 60;
+const REF_GROUND_H   = 112;
+const REF_BIRD_SIZE   = 40;
 const BG_SCROLL  = 20;
-const GROUND_SCROLL = 140; // same as pipe speed
+const GROUND_SCROLL = 140;
 const BIRD_TILT_UP   = -25;
 const BIRD_TILT_DOWN  = 70;
 const BIRD_TILT_LERP  = 6;
@@ -54,6 +55,28 @@ const COL_PURPLE   = '#a78bfa';
 const COL_PINK     = '#ec4899';
 const COL_TEXT      = '#f5f0ff';
 const COL_TEXT_DIM  = '#b4aaed';
+
+// --- Runtime dimensions (set by resize) ---
+let W, H, S; // S = scale factor (H / REF_H)
+let GROUND_H, GROUND_Y, PIPE_GAP, PIPE_MIN_TOP, BIRD_SIZE, BIRD_START_X, BIRD_START_Y;
+let PW, PH; // pipe image dimensions (scaled)
+
+function recalcDimensions() {
+  W = C.width;
+  H = C.height;
+  S = H / REF_H;
+  GROUND_H = REF_GROUND_H * S;
+  GROUND_Y = H - GROUND_H;
+  PIPE_GAP = REF_PIPE_GAP * S;
+  PIPE_MIN_TOP = REF_PIPE_MIN_TOP * S;
+  BIRD_SIZE = REF_BIRD_SIZE * S;
+  BIRD_START_X = Math.floor(W / 3);
+  BIRD_START_Y = Math.floor(H / 2);
+
+  const pImg = ASSETS['pipe-green'];
+  PW = (pImg?.naturalWidth || 52) * S;
+  PH = (pImg?.naturalHeight || 320) * S;
+}
 
 // --- State ---
 let state, birdY, birdVY, birdTilt, score, pipes, spawnT;
@@ -101,92 +124,94 @@ function makeTintedBg() {
 // --- Drawing helpers ---
 function drawBg() {
   const img = bgTinted || ASSETS['background-day'];
-  const w = img.width || img.naturalWidth || 288;
-  let x = -(bgOff % w);
-  if (x > 0) x -= w;
-  while (x < W) { X.drawImage(img, x, 0); x += w; }
+  const srcW = img.width || img.naturalWidth || 288;
+  const srcH = img.height || img.naturalHeight || 512;
+  // Scale background to fill width, tile if needed
+  const drawH = H;
+  const drawW = srcW * (drawH / srcH);
+  let x = -(bgOff % drawW);
+  if (x > 0) x -= drawW;
+  while (x < W) { X.drawImage(img, x, 0, drawW, drawH); x += drawW; }
 }
 
 function drawGround() {
   const img = ASSETS['base'];
-  const w = img.naturalWidth || img.width || 336;
-  let x = -(groundOff % w);
-  if (x > 0) x -= w;
-  while (x < W) { X.drawImage(img, x, GROUND_Y); x += w; }
+  const srcW = img.naturalWidth || img.width || 336;
+  const srcH = img.naturalHeight || img.height || 112;
+  const drawW = srcW * S;
+  const drawH = srcH * S;
+  let x = -(groundOff % drawW);
+  if (x > 0) x -= drawW;
+  while (x < W) { X.drawImage(img, x, GROUND_Y, drawW, drawH); x += drawW; }
 }
 
 function drawBird() {
   const img = ASSETS['kiro'];
-  const pw = img.naturalWidth || img.width || 1024;
-  const ph = img.naturalHeight || img.height || 1024;
-  const scale = BIRD_SIZE / Math.max(pw, ph);
   X.save();
   X.translate(BIRD_START_X, birdY);
   X.rotate(-birdTilt * Math.PI / 180);
-  // Shrink hitbox slightly for visual fairness
   X.drawImage(img, -BIRD_SIZE/2, -BIRD_SIZE/2, BIRD_SIZE, BIRD_SIZE);
   X.restore();
 }
 
 function drawPipes() {
   const img = ASSETS['pipe-green'];
-  const pw = img.naturalWidth || img.width || 52;
-  const ph = img.naturalHeight || img.height || 320;
   for (const p of pipes) {
     // Top pipe (flipped)
     X.save();
     X.translate(p.x, p.gapTop);
     X.scale(1, -1);
-    X.drawImage(img, -pw/2, 0, pw, ph);
+    X.drawImage(img, -PW/2, 0, PW, PH);
     X.restore();
 
     // Bottom pipe
-    X.drawImage(img, p.x - pw/2, p.gapBottom, pw, ph);
+    X.drawImage(img, p.x - PW/2, p.gapBottom, PW, PH);
   }
 }
 
 function drawScore() {
   const digits = String(score).split('').map(Number);
   const imgs = digits.map(d => ASSETS[String(d)]);
-  const scale = 1.5;
-  const gap = 2;
+  const sc = 1.5 * S;
+  const gap = 2 * S;
   let totalW = 0;
   for (const im of imgs) {
-    const dw = (im.naturalWidth || im.width || 24) * scale;
+    const dw = (im.naturalWidth || im.width || 24) * sc;
     totalW += dw + gap;
   }
   totalW -= gap;
   let x = (W - totalW) / 2;
+  const dy = 40 * S;
   for (const im of imgs) {
-    const dw = (im.naturalWidth || im.width || 24) * scale;
-    const dh = (im.naturalHeight || im.height || 36) * scale;
-    X.drawImage(im, x, 40, dw, dh);
+    const dw = (im.naturalWidth || im.width || 24) * sc;
+    const dh = (im.naturalHeight || im.height || 36) * sc;
+    X.drawImage(im, x, dy, dw, dh);
     x += dw + gap;
   }
 }
 
-function drawOverlay(alpha, title, subtitle, prompt, promptY) {
+function drawOverlay(alpha, title, subtitle, prompt, promptYRef) {
   X.fillStyle = `rgba(15,14,38,${alpha})`;
   X.fillRect(0, 0, W, H);
 
-  X.font = 'bold 28px Arial, sans-serif';
+  X.font = `bold ${28 * S}px Arial, sans-serif`;
   X.textAlign = 'center';
   X.textBaseline = 'middle';
   X.fillStyle = COL_PURPLE;
-  X.fillText(title, W/2, 115);
+  X.fillText(title, W/2, H * 0.22);
 
   if (subtitle) {
-    X.font = 'bold 12px Arial, sans-serif';
+    X.font = `bold ${12 * S}px Arial, sans-serif`;
     X.fillStyle = COL_TEXT_DIM;
-    X.fillText(subtitle, W/2, 142);
+    X.fillText(subtitle, W/2, H * 0.28);
   }
 
   if (prompt) {
     const a = 0.6 + 0.4 * Math.sin(t * PROMPT_FREQ);
     X.globalAlpha = Math.max(0.4, Math.min(1, a));
-    X.font = 'bold 14px Arial, sans-serif';
+    X.font = `bold ${14 * S}px Arial, sans-serif`;
     X.fillStyle = COL_TEXT;
-    X.fillText(prompt, W/2, promptY);
+    X.fillText(prompt, W/2, promptYRef * S);
     X.globalAlpha = 1;
   }
 }
@@ -195,14 +220,11 @@ function drawOverlay(alpha, title, subtitle, prompt, promptY) {
 function hitSomething() {
   const bx = BIRD_START_X, by = birdY, br = BIRD_SIZE * 0.38;
 
-  // Ground / ceiling
   if (by + br >= GROUND_Y) return 'ground';
   if (by - br <= 0) return 'ceiling';
 
-  // Pipes
-  const pw = 52;
   for (const p of pipes) {
-    if (bx + br > p.x - pw/2 && bx - br < p.x + pw/2) {
+    if (bx + br > p.x - PW/2 && bx - br < p.x + PW/2) {
       if (by - br < p.gapTop || by + br > p.gapBottom) return 'pipe';
     }
   }
@@ -212,47 +234,41 @@ function hitSomething() {
 // --- Game loop ---
 function update(dt) {
   t += dt;
-  bgOff += BG_SCROLL * dt;
+  bgOff += BG_SCROLL * S * dt;
 
   if (state === 'ready') {
-    groundOff += GROUND_SCROLL * dt;
-    birdY = BIRD_START_Y + Math.sin(t * BOB_FREQ) * BOB_AMP;
+    groundOff += GROUND_SCROLL * S * dt;
+    birdY = BIRD_START_Y + Math.sin(t * BOB_FREQ) * BOB_AMP * S;
     birdTilt = 0;
   } else if (state === 'playing') {
-    birdVY = Math.min(birdVY + GRAVITY * dt, MAX_FALL);
+    birdVY = Math.min(birdVY + GRAVITY * S * dt, MAX_FALL * S);
     birdY += birdVY * dt;
-    groundOff += GROUND_SCROLL * dt;
+    groundOff += GROUND_SCROLL * S * dt;
     const target = birdVY < 0 ? BIRD_TILT_UP : BIRD_TILT_DOWN;
     birdTilt += (target - birdTilt) * Math.min(1, BIRD_TILT_LERP * dt);
 
-    // Spawn
     spawnT += dt;
     if (spawnT >= PIPE_SPAWN) {
       spawnT = 0;
-      const maxTop = GROUND_Y - PIPE_GAP - 60;
+      const maxTop = GROUND_Y - PIPE_GAP - 60 * S;
       const gapTop = Math.floor(Math.random() * (maxTop - PIPE_MIN_TOP)) + PIPE_MIN_TOP;
-      pipes.push({ x: W + 40, gapTop, gapBottom: gapTop + PIPE_GAP, scored: false });
+      pipes.push({ x: W + 40 * S, gapTop, gapBottom: gapTop + PIPE_GAP, scored: false });
     }
 
-    // Move
-    for (const p of pipes) p.x -= PIPE_SPEED * dt;
-    pipes = pipes.filter(p => p.x > -60);
+    for (const p of pipes) p.x -= PIPE_SPEED * S * dt;
+    pipes = pipes.filter(p => p.x > -60 * S);
 
-    // Score
     for (const p of pipes) {
       if (!p.scored && p.x < BIRD_START_X) { p.scored = true; score++; }
     }
 
-    // Collision
     const hit = hitSomething();
     if (hit === 'ground') { birdY = GROUND_Y - BIRD_SIZE/2; state = 'dead'; }
     else if (hit) { state = 'dead'; }
   }
-  // dead: frozen
 }
 
 function render() {
-  // Clear with bg color
   X.fillStyle = COL_BG;
   X.fillRect(0, 0, W, H);
 
@@ -282,19 +298,21 @@ function loop(time) {
 function handleInput() {
   if (state === 'dead') { reset(); return; }
   if (state === 'ready') state = 'playing';
-  birdVY = JUMP_VEL;
+  birdVY = JUMP_VEL * S;
 }
 
 // --- Resize ---
 function resize() {
-  C.width = W; C.height = H;
-  const scale = Math.min(window.innerWidth / W, window.innerHeight / H);
-  C.style.width  = (W * scale) + 'px';
-  C.style.height = (H * scale) + 'px';
+  C.width = window.innerWidth;
+  C.height = window.innerHeight;
+  C.style.width = '100%';
+  C.style.height = '100%';
+  recalcDimensions();
 }
 
 // --- Reset ---
 function reset() {
+  recalcDimensions();
   state = 'ready';
   birdY = BIRD_START_Y;
   birdVY = 0;
@@ -318,7 +336,7 @@ async function boot() {
   resize();
   reset();
 
-  window.addEventListener('resize', resize);
+  window.addEventListener('resize', () => { resize(); });
   window.addEventListener('keydown', e => {
     if (e.code === 'Space' || e.code === 'ArrowUp') { e.preventDefault(); handleInput(); }
   });
